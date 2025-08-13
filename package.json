@@ -1,0 +1,136 @@
+{
+  "name": "typescript-debugger",
+  "displayName": "TypeScript Debugger",
+  "version": "1.0.0",
+  "publisher": "your-publisher",
+  "description": "TypeScript debugger with source map support",
+  "categories": ["Debuggers"],
+  "keywords": ["typescript", "debug", "sourcemap"],
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "activationEvents": [
+    "onDebugResolve:typescript",
+    "onDebugInitialConfigurations:typescript"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "breakpoints": [
+      {
+        "language": "typescript"
+      },
+      {
+        "language": "typescriptreact"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "typescript",
+        "label": "TypeScript Debug",
+        "program": "./out/mockDebug.js",
+        "runtime": "node",
+        "languages": ["typescript", "typescriptreact"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Absolute path to TypeScript file to debug",
+                "default": "${workspaceFolder}/${command:AskForProgramName}"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Automatically stop after launch",
+                "default": true
+              },
+              "sourceMaps": {
+                "type": "boolean",
+                "description": "Enable source map support",
+                "default": true
+              },
+              "outDir": {
+                "type": "string",
+                "description": "Output directory for compiled JS files",
+                "default": "${workspaceFolder}/dist"
+              },
+              "rootDir": {
+                "type": "string",
+                "description": "Root directory of TypeScript source files",
+                "default": "${workspaceFolder}/src"
+              },
+              "tsconfig": {
+                "type": "string",
+                "description": "Path to tsconfig.json",
+                "default": "${workspaceFolder}/tsconfig.json"
+              },
+              "skipFiles": {
+                "type": "array",
+                "description": "Skip these files when debugging",
+                "default": ["<node_internals>/**"]
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "typescript",
+            "request": "launch",
+            "name": "Debug TypeScript",
+            "program": "${workspaceFolder}/src/main.ts",
+            "sourceMaps": true,
+            "outDir": "${workspaceFolder}/dist",
+            "stopOnEntry": true,
+            "skipFiles": ["<node_internals>/**"]
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "extension.typescript-debug.runEditorContents",
+        "title": "Run TypeScript File",
+        "category": "TypeScript Debug",
+        "enablement": "!inDebugMode",
+        "icon": "$(play)"
+      },
+      {
+        "command": "extension.typescript-debug.debugEditorContents", 
+        "title": "Debug TypeScript File",
+        "category": "TypeScript Debug",
+        "enablement": "!inDebugMode",
+        "icon": "$(debug-alt)"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "extension.typescript-debug.runEditorContents",
+          "when": "resourceLangId == typescript",
+          "group": "navigation@1"
+        },
+        {
+          "command": "extension.typescript-debug.debugEditorContents",
+          "when": "resourceLangId == typescript",
+          "group": "navigation@2"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^18.x.x",
+    "@types/vscode": "^1.74.0",
+    "typescript": "^4.x.x"
+  },
+  "dependencies": {
+    "@vscode/debugadapter": "^1.51.0",
+    "@vscode/debugprotocol": "^1.51.0",
+    "source-map": "^0.7.4",
+    "ws": "^8.0.0",
+    "path-browserify": "^1.0.1"
+  }
+}
