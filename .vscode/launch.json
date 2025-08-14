@@ -53,6 +53,71 @@
             "runtimeArgs": [
                 "--inspect=9230"
             ]
+        },
+        {
+            "name": "Run Extension",
+            "type": "extensionHost",
+            "request": "launch",
+            "runtimeExecutable": "${execPath}",
+            "args": [
+                "--extensionDevelopmentPath=${workspaceFolder}"
+            ],
+            "outFiles": [
+                "${workspaceFolder}/out/**/*.js"
+            ],
+            "preLaunchTask": "${workspaceFolder}/npm: compile"
+        },
+        {
+            "name": "Debug Extension",
+            "type": "extensionHost", 
+            "request": "launch",
+            "runtimeExecutable": "${execPath}",
+            "args": [
+                "--extensionDevelopmentPath=${workspaceFolder}",
+                "--extensionTestsPath=${workspaceFolder}/out/test/suite/index"
+            ],
+            "outFiles": [
+                "${workspaceFolder}/out/**/*.js"
+            ],
+            "preLaunchTask": "${workspaceFolder}/npm: compile"
+        },
+        {
+            "name": "Debug Extension + Debug Adapter",
+            "type": "extensionHost",
+            "request": "launch", 
+            "runtimeExecutable": "${execPath}",
+            "args": [
+                "--extensionDevelopmentPath=${workspaceFolder}"
+            ],
+            "outFiles": [
+                "${workspaceFolder}/out/**/*.js"
+            ],
+            "preLaunchTask": "${workspaceFolder}/npm: compile",
+            "env": {
+                "VSCODE_DEBUG_MODE": "true"
+            }
+        },
+        {
+            "name": "Debug TypeScript Debug Adapter",
+            "type": "node",
+            "request": "launch",
+            "program": "${workspaceFolder}/out/mockDebug.js",
+            "args": [
+                "--server=4711"
+            ],
+            "outFiles": [
+                "${workspaceFolder}/out/**/*.js"  
+            ],
+            "preLaunchTask": "${workspaceFolder}/npm: compile"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Debug Extension + Adapter",
+            "configurations": [
+                "Debug Extension",
+                "Debug TypeScript Debug Adapter"
+            ]
         }
     ]
 }
