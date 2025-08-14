@@ -1,0 +1,58 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug TypeScript File",
+            "type": "typescript",
+            "request": "launch",
+            "program": "${file}",
+            "stopOnEntry": true,
+            "sourceMaps": true,
+            "outDir": "${workspaceFolder}/dist",
+            "rootDir": "${workspaceFolder}/src",
+            "skipFiles": [
+                "<node_internals>/**"
+            ]
+        },
+        {
+            "name": "Debug main.ts",
+            "type": "typescript", 
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main.ts",
+            "stopOnEntry": true,
+            "sourceMaps": true,
+            "outDir": "${workspaceFolder}/dist",
+            "rootDir": "${workspaceFolder}/src",
+            "skipFiles": [
+                "<node_internals>/**"
+            ]
+        },
+        {
+            "name": "Run TypeScript File (No Debug)",
+            "type": "typescript",
+            "request": "launch", 
+            "program": "${file}",
+            "stopOnEntry": false,
+            "sourceMaps": true,
+            "outDir": "${workspaceFolder}/dist",
+            "rootDir": "${workspaceFolder}/src",
+            "noDebug": true
+        },
+        {
+            "name": "Debug with Custom Port", 
+            "type": "typescript",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main.ts",
+            "stopOnEntry": true,
+            "sourceMaps": true,
+            "outDir": "${workspaceFolder}/dist",
+            "rootDir": "${workspaceFolder}/src",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "runtimeArgs": [
+                "--inspect=9230"
+            ]
+        }
+    ]
+}

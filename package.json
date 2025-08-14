@@ -1,0 +1,11 @@
+{  
+  "name": "typescript-debug-test",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "devDependencies": {
+    "typescript": "^4.6.3"
+  }
+}
