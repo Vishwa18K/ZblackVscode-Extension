@@ -1,0 +1,14 @@
+out
+dist
+node_modules
+.vscode-test/
+npm-debug.log
+mock-debug.txt
+*.vsix
+.DS_Store
+readme.md
+thirdpartynotices.txt
+SECURITY.md
+LICENSE.txt
+images
+.github/workflows
