@@ -38,7 +38,7 @@ import {
 
 import { DebugProtocol } from '@vscode/debugprotocol';
 
-import { basename, dirname, join } from 'path-browserify';
+import { basename, dirname } from 'path-browserify';
 
 import { MockRuntime, IRuntimeBreakpoint, FileAccessor, RuntimeVariable, timeout, IRuntimeVariableType } from './mockRuntime';
 
@@ -48,7 +48,8 @@ import * as base64 from 'base64-js';
 
 import { SourceMapConsumer } from 'source-map';
 
-
+import * as ts from 'typescript';
+import path = require('path');
 
 interface SourceMapCache {
 
@@ -128,7 +129,7 @@ interface IAttachRequestArguments extends ILaunchRequestArguments { }
 
 export class MockDebugSession extends LoggingDebugSession {
 
-
+	
 
 	// we don't support multiple threads, so we can use a hardcoded ID for the default thread
 
@@ -151,37 +152,16 @@ export class MockDebugSession extends LoggingDebugSession {
 
 
 	private async readSourceMapFile(sourceMapPath: string): Promise<string | null> {
-
-		try {
-
-		
-
-			const fileContents = await (this._runtime as any).fileAccessor.readFile(sourceMapPath);
-
-			
-
-	
-
-			
-
-			
-
-			const decoder = new TextDecoder('utf-8');
-
-			const sourceMapContent = decoder.decode(fileContents);
-
-			
-
-			return sourceMapContent;
-
-		} catch (error) {
-
-			console.error(`Failed to read source map file ${sourceMapPath}:`, error);
-
-			return null;
-
-		}
-
+    try {
+        const fileContents = await (this._runtime as any).fileAccessor.readFile(sourceMapPath);
+        const decoder = new TextDecoder('utf-8');
+        const sourceMapContent = decoder.decode(fileContents);
+        return sourceMapContent;
+    } catch (error) {
+        // Don't log as error, source maps might not exist
+        console.log(`Source map not found: ${sourceMapPath}`);
+        return null;
+    }
 	}
 
 	/**
@@ -192,73 +172,46 @@ export class MockDebugSession extends LoggingDebugSession {
 
 	private async getSourceMap(jsFilePath: string): Promise<SourceMapConsumer | null> {
 
-		try {
+	   
+    	try {
+        if (this._sourceMapCache[jsFilePath]) {
+            console.log(`[getSourceMap] Cache hit for ${jsFilePath}`);
+            return this._sourceMapCache[jsFilePath];
+        }
 
-			
-
-			if (this._sourceMapCache[jsFilePath]) {
-
-				console.log(`[getSourceMap] Cache hit for ${jsFilePath}`);
-
-				return this._sourceMapCache[jsFilePath];
-
-			}
-
-
-
-			
-
-			const sourceMapPath = jsFilePath + '.map';
-
-			
-
-			// Try to read the source map file
-
-			// Note: need to implement file reading based on your FileAccessor
-
-			// This is a placeholder
-
+        // The source map should be in the same directory as the JS file
+        const sourceMapPath = jsFilePath + '.map';
+        
+        console.log(`[getSourceMap] Looking for source map: ${sourceMapPath}`);
+        
 			try {
-
 				const sourceMapContent = await this.readSourceMapFile(sourceMapPath);
-
 				if (sourceMapContent) {
-
 					console.log(`[getSourceMap] Loaded source map for ${jsFilePath}`);
-
 					const consumer = await new SourceMapConsumer(sourceMapContent);
-
 					this._sourceMapCache[jsFilePath] = consumer;
-
 					return consumer;
-
 				} else {
-
 					console.warn(`[getSourceMap] No source map found for ${jsFilePath}`);
-
 				}
-
 			} catch (error) {
-
-				console.log(`No source map found for ${jsFilePath}:`, error);
-
+				console.log(`[getSourceMap] No source map found for ${jsFilePath}:`, error);
 			}
 
-
-
 			return null;
-
 		} catch (error) {
-
 			console.error('[getSourceMap] Error loading source map:', error);
-
 			return null;
-
 		}
+}
 
-	}
-
-
+	private normalizePath(path: string): string {
+		// Handle Windows paths consistently
+		return path
+			.replace(/\\/g, '/')
+			.replace(/^([a-zA-Z]):\//, '$1:/')  // Preserve drive letter
+			.toLowerCase();
+		}
 
 
 
@@ -269,68 +222,64 @@ export class MockDebugSession extends LoggingDebugSession {
 	 */
 
 	private async convertTsToJs(tsPath: string, line: number, column: number = 0): Promise<{jsPath: string, line: number, column: number} | null> {
-
-		try {
-
-			console.log("converting ts source loc to js loc vian source maps");
-
-			const jsPath = this._tsToJsMap.get(tsPath);
-
-			if (!jsPath)	{
-
-				
-
-				return null;
-
-			}
-
-			const sourceMap = await this.getSourceMap(jsPath);
-
-			if (!sourceMap) {
-
-				
-
-				return null;
-
-			}
-
-
-
-			const generated = sourceMap.generatedPositionFor({
-
-				source: tsPath,
-
-				line: line + 1, // source maps are 1-based
-
-				column: column
-
-			});
-
-
-
-			if (generated.line !== null && generated.column !== null) {
-
-				return {
-
-					jsPath,
-
-					line: generated.line - 1, // convert back to 0-based
-
-					column: generated.column
-
-				};
-
-			}
-
-		} catch (error) {
-
-			console.error('Error converting TS to JS location:', error);
-
+    try {
+        console.log("converting ts source loc to js loc via source maps");
+        const normalizedTsPath = this.normalizePath(tsPath);
+        const jsPath = this._tsToJsMap.get(normalizedTsPath);
+        
+        if (!jsPath) {
+            console.log(`[convertTsToJs] No JS mapping found for ${normalizedTsPath}`);
+            return null;
+        }
+        
+        const sourceMap = await this.getSourceMap(jsPath);
+		if (!sourceMap) {
+			console.warn(`[convertTsToJs] Source map not found for ${jsPath}`);
+			return { jsPath, line, column: 0 }; // Fallback to direct mapping
 		}
 
-		return null;
+        // Use eachMapping to iterate through all mappings and find sources
+        const sourcePaths: string[] = [];
+        sourceMap.eachMapping((mapping) => {
+            if (mapping.source && !sourcePaths.includes(mapping.source)) {
+                sourcePaths.push(mapping.source);
+            }
+        });
 
-	}
+        let matchingSource = sourcePaths.find(src => 
+    	this.normalizePath(src) === normalizedTsPath
+		);
+        
+        if (!matchingSource) {
+            // Try to find by filename
+            const tsFileName = tsPath.split(/[\\\/]/).pop();
+            matchingSource = sourcePaths.find(src => src.includes(tsFileName || ''));
+        }
+
+        if (!matchingSource) {
+            console.log(`[convertTsToJs] Source ${tsPath} not found in source map sources:`, sourcePaths);
+            return null;
+        }
+
+        const generated = sourceMap.generatedPositionFor({
+            source: matchingSource,
+            line: line + 1, // source maps are 1-based
+            column: column
+        });
+
+        if (generated.line !== null && generated.column !== null) {
+            console.log(`[convertTsToJs] Mapped ${tsPath}:${line} -> ${jsPath}:${generated.line - 1}`);
+            return {
+                jsPath,
+                line: generated.line - 1, // convert back to 0-based
+                column: generated.column
+            };
+        }
+    } catch (error) {
+        console.error('Error converting TS to JS location:', error);
+    }
+    return null;
+}
 
 
 
@@ -339,7 +288,10 @@ export class MockDebugSession extends LoggingDebugSession {
 
 
 	private async convertJsToTs(jsPath: string, line: number, column: number = 0): Promise<{tsPath: string, line: number, column: number} | null> {
-
+	 	const resolveSourcePath = (sourcePath: string) => {
+        if (path.isAbsolute(sourcePath)) return sourcePath;
+        	return path.resolve(path.dirname(jsPath), sourcePath);
+    	};
 		try {
 
 			console.log(`[convertJsToTs] JS ${jsPath}:${line}:${column}`);
@@ -392,35 +344,61 @@ export class MockDebugSession extends LoggingDebugSession {
 
 		}
 
+		
 
+		private async compileTypeScript(tsPath: string, jsPath: string): Promise<void> {
+    // Add at the top if you have typescript installed as a dependency:
+		//import * as ts from 'typescript';
 
-		private initializeFileMappings(args: ILaunchRequestArguments): void {
+    try {
+        // Read TypeScript file
+        const tsContentBytes = await this._runtime.fileAccessor.readFile(tsPath);
+        const tsContent = new TextDecoder('utf-8').decode(tsContentBytes);
 
-    // Super simple: just replace .ts with .js in the same relative location
+        // Compile options with source maps
+        const compileOptions: ts.CompilerOptions = {
+            target: ts.ScriptTarget.ES2020,
+            module: ts.ModuleKind.CommonJS,
+            sourceMap: true,
+            outDir: dirname(jsPath),
+            rootDir: dirname(tsPath)
+        };
 
-    if (args.program.endsWith('.ts')) {
+        // Compile TypeScript
+        const result = ts.transpileModule(tsContent, {
+            compilerOptions: compileOptions,
+            fileName: tsPath
+        });
 
-        const jsPath = args.program.replace('.ts', '.js').replace('/src/', '/dist/');
+        // Write JavaScript file
+        const fs = require('fs').promises;
+        await fs.writeFile(jsPath, result.outputText);
 
-        this._tsToJsMap.set(args.program, jsPath);
+        // Write source map if generated
+        if (result.sourceMapText) {
+            await fs.writeFile(jsPath + '.map', result.sourceMapText);
+        }
 
-        this._jsToTsMap.set(jsPath, args.program);
-
-        
-
-        // Add debug logging
-
-        console.log(` File mapping created:`);
-
-        console.log(`  TS: ${args.program}`);
-
-        console.log(`  JS: ${jsPath}`);
-
-        console.log(`  Map size: ${this._tsToJsMap.size}`);
-
+        console.log(`Successfully compiled ${tsPath} to ${jsPath}`);
+    } catch (error: any) {
+        console.error(`Failed to compile TypeScript: ${error}`);
+        throw error;
     }
+	}
 
-}
+
+
+
+
+
+		private async ensureJavaScriptExists(tsPath: string, jsPath: string): Promise<void> {
+		try {
+			await this._runtime.fileAccessor.readFile(jsPath);
+		} catch {
+			console.warn(`JavaScript file missing: ${jsPath}`);
+			// Don't attempt compilation - assume pre-built
+		}
+	}
 
 
 
@@ -611,7 +589,6 @@ export class MockDebugSession extends LoggingDebugSession {
 			this._reportProgress = true;
 
 		}
-
 		if (args.supportsInvalidatedEvent) {
 
 			this._useInvalidatedEvent = true;
@@ -814,58 +791,66 @@ export class MockDebugSession extends LoggingDebugSession {
 
 	}
 
+	private initializeFileMappings(args: ILaunchRequestArguments): void {
+    const tsPath = this.normalizePath(args.program);
+    if (tsPath.endsWith('.ts')) {
+        // Use outDir if specified
+        const outDir = args.outDir || dirname(tsPath).replace('src', 'dist');
+        const jsPath = `${outDir}/${basename(tsPath, '.ts')}.js`;
+        
+        this._tsToJsMap.set(tsPath, jsPath);
+        this._jsToTsMap.set(jsPath, tsPath);
+    }
+	}
 
 
 	protected async launchRequest(response: DebugProtocol.LaunchResponse, args: ILaunchRequestArguments) {
+    // Initialize file mappings first
+    this.initializeFileMappings(args);
+    console.log("Launch request started");
+    
+    // Setup logging
+    logger.setup(args.trace ? Logger.LogLevel.Verbose : Logger.LogLevel.Stop, false);
 
-	// Initialize file mappings
+    // Wait for configuration
+    await this._configurationDone.wait(1000);
 
-	this.initializeFileMappings(args);
+    // Get the JavaScript file to run
+    const jsProgram = this._tsToJsMap.get(args.program) || args.program;
+    
+    // Verify JS file exists before starting runtime
+    try {
+        await this._runtime.fileAccessor.readFile(jsProgram);
+    } catch (error) {
+        this.sendErrorResponse(response, {
+            id: 1004,
+            format: `JavaScript file not found: ${jsProgram}. Make sure TypeScript is compiled first.`,
+            showUser: true
+        });
+        return;
+    }
 
-	console.log("Launch rrequest have been started")
-
-	// make sure to 'Stop' the buffered logging if 'trace' is not set
-
-	logger.setup(args.trace ? Logger.LogLevel.Verbose : Logger.LogLevel.Stop, false);
-
-
-
-	// wait 1 second until configuration has finished
-
-	await this._configurationDone.wait(1000);
-
-
-
-	// Determine the actual JS file to run
-
-	const jsProgram = this._tsToJsMap.get(args.program) || args.program;
-
-
-
-	// start the program in the runtime
-
-	await this._runtime.start(jsProgram, !!args.stopOnEntry, !args.noDebug);
-
-
-
-	if (args.compileError) {
-
-		this.sendErrorResponse(response, {
-
-			id: 1001,
-
-			format: `compile error: some fake error.`,
-
-			showUser: args.compileError === 'show' ? true : (args.compileError === 'hide' ? false : undefined)
-
-		});
-
-	} else {
-
-		this.sendResponse(response);
-
-	}
-
+    try {
+        // Start the runtime with proper error handling
+        await this._runtime.start(jsProgram, !!args.stopOnEntry, !args.noDebug);
+        
+        if (args.compileError) {
+            this.sendErrorResponse(response, {
+                id: 1001,
+                format: `compile error: some fake error.`,
+                showUser: args.compileError === 'show' ? true : (args.compileError === 'hide' ? false : undefined)
+            });
+        } else {
+            this.sendResponse(response);
+        }
+    } catch (error: any) {
+        console.error('Failed to start runtime:', error);
+        this.sendErrorResponse(response, {
+            id: 1005,
+            format: `Failed to start debugger: ${error && error.message ? error.message : String(error)}`,
+            showUser: true
+        });
+    }
 }
 
 
@@ -879,178 +864,115 @@ export class MockDebugSession extends LoggingDebugSession {
 
 
 	protected async setBreakPointsRequest(response: DebugProtocol.SetBreakpointsResponse, args: DebugProtocol.SetBreakpointsArguments): Promise<void> {
-
-	const tsPath = args.source.path as string;
-
-	const clientLines = args.lines || [];
-
-
-
-	// Ensure file mapping exists for this TS file
-
-	if (!this._tsToJsMap.has(tsPath)) {
-
-		const jsPath = tsPath.replace(/\.ts$/, '.js').replace(/\/src\//, '/dist/');
-
-		this._tsToJsMap.set(tsPath, jsPath);
-
-		this._jsToTsMap.set(jsPath, tsPath);
-
-		console.log(`[setBreakPointsRequest] File mapping created for breakpoint:`);
-
-		console.log(`  TS: ${tsPath}`);
-
-		console.log(`  JS: ${jsPath}`);
-
-	}
-
-
-
-	// Convert TypeScript breakpoints to JavaScript locations
-
-	const jsBreakpoints: Array<{jsPath: string, line: number, originalLine: number}> = [];
-
-	
-
-	for (const line of clientLines) {
-
-		const tsLine = this.convertClientLineToDebugger(line);
-
-		const jsLocation = await this.convertTsToJs(tsPath, tsLine);
-
-		
-
-		if (jsLocation) {
-
-			console.log(`[setBreakPointsRequest] Mapped TS ${tsPath}:${tsLine} -> JS ${jsLocation.jsPath}:${jsLocation.line}`);
-
-			jsBreakpoints.push({
-
-				jsPath: jsLocation.jsPath,
-
-				line: jsLocation.line,
-
-				originalLine: tsLine
-
-			});
-
-		} else {
-
-			// Fallback: assume direct mapping if no source map
-
-			const jsPath = this._tsToJsMap.get(tsPath);
-
-			if (jsPath) {
-
-				console.log(`[setBreakPointsRequest] No source map, fallback TS ${tsPath}:${tsLine} -> JS ${jsPath}:${tsLine}`);
-
-				jsBreakpoints.push({
-
-					jsPath,
-
-					line: tsLine,
-
-					originalLine: tsLine
-
-				});
-
-			}
-
-		}
-
-	}
-
-
-
-	const jsPath = this._tsToJsMap.get(tsPath);
-
-	if (jsPath) {
-
-		this._runtime.clearBreakpoints(jsPath);
-
-	}
-
-
-
-	// Set breakpoints in JavaScript files
-
-	const actualBreakpoints = await Promise.all(
-
-		jsBreakpoints.map(async (bp) => {
-
-			const { verified, line, id } = await this._runtime.setBreakPoint(bp.jsPath, bp.line);
-
-			
-
-			// Convert back to TypeScript line number for response
-
-			const tsLocation = await this.convertJsToTs(bp.jsPath, line);
-
-			const finalLine = tsLocation ? tsLocation.line : bp.originalLine;
-
-			
-
-			const breakpoint = new Breakpoint(verified, this.convertDebuggerLineToClient(finalLine)) as DebugProtocol.Breakpoint;
-
-			breakpoint.id = id;
-
-			return breakpoint;
-
-		})
-
-	);
-
-
-
-	response.body = {
-
-		breakpoints: actualBreakpoints
-
-	};
-
-		this.sendResponse(response);
-
-	}
-
-
-
-	protected breakpointLocationsRequest(response: DebugProtocol.BreakpointLocationsResponse, args: DebugProtocol.BreakpointLocationsArguments, request?: DebugProtocol.Request): void {
-
-
-
-		if (args.source.path) {
-
-			const bps = this._runtime.getBreakpoints(args.source.path, this.convertClientLineToDebugger(args.line));
-
-			response.body = {
-
-				breakpoints: bps.map(col => {
-
-					return {
-
-						line: args.line,
-
-						column: this.convertDebuggerColumnToClient(col)
-
-					};
-
-				})
-
-			};
-
-		} else {
-
-			response.body = {
-
-				breakpoints: []
-
-			};
-
-		}
-
-		this.sendResponse(response);
-
-	}
+    const tsPath = args.source.path as string;
+    const clientLines = args.lines || [];
+
+    // Check if the TypeScript file actually exists
+    try {
+		await this._runtime.fileAccessor.readFile(tsPath);
+    } catch (error) {
+        console.error(`[setBreakPointsRequest] TypeScript file not found: ${tsPath}`);
+        // Return empty breakpoints if the file doesn't exist
+        response.body = {
+            breakpoints: clientLines.map(line => {
+                const breakpoint = new Breakpoint(false, this.convertDebuggerLineToClient(this.convertClientLineToDebugger(line))) as DebugProtocol.Breakpoint;
+                return breakpoint;
+            })
+        };
+        this.sendResponse(response);
+        return;
+    }
+
+    const normalizedTsPath = this.normalizePath(tsPath);
+
+    // Ensure file mapping exists for this TS file
+    if (!this._tsToJsMap.has(normalizedTsPath)) {
+        // Create the correct mapping based on your project structure
+        const jsPath = tsPath.replace(/[\\\/]src[\\\/]/, '/dist/').replace('.ts', '.js');
+        const normalizedJsPath = this.normalizePath(jsPath);
+        
+        // Check if JS file exists
+        try {
+			await this._runtime.fileAccessor.readFile(jsPath);
+            this._tsToJsMap.set(normalizedTsPath, normalizedJsPath);
+            this._jsToTsMap.set(normalizedJsPath, normalizedTsPath);
+            console.log(`[setBreakPointsRequest] File mapping created for breakpoint:`);
+            console.log(`  TS: ${normalizedTsPath}`);
+            console.log(`  JS: ${normalizedJsPath}`);
+        } catch (error) {
+            console.error(`[setBreakPointsRequest] JavaScript file not found: ${jsPath}`);
+            // You might want to compile the TypeScript file here or return an error
+            response.body = {
+                breakpoints: clientLines.map(line => {
+                    const breakpoint = new Breakpoint(false, this.convertDebuggerLineToClient(this.convertClientLineToDebugger(line))) as DebugProtocol.Breakpoint;
+                    return breakpoint;
+                })
+            };
+            this.sendResponse(response);
+            return;
+        }
+    }
+
+    // Convert TypeScript breakpoints to JavaScript locations
+    const jsBreakpoints: Array<{jsPath: string, line: number, originalLine: number}> = [];
+    
+    for (const line of clientLines) {
+        const tsLine = this.convertClientLineToDebugger(line);
+        const jsLocation = await this.convertTsToJs(normalizedTsPath, tsLine);
+        
+        if (jsLocation) {
+            console.log(`[setBreakPointsRequest] Mapped TS ${normalizedTsPath}:${tsLine} -> JS ${jsLocation.jsPath}:${jsLocation.line}`);
+            jsBreakpoints.push({
+                jsPath: jsLocation.jsPath,
+                line: jsLocation.line,
+                originalLine: tsLine
+            });
+        } else {
+            // Fallback: assume direct mapping if no source map
+            const jsPath = this._tsToJsMap.get(normalizedTsPath);
+            if (jsPath) {
+                console.log(`[setBreakPointsRequest] No source map, fallback TS ${normalizedTsPath}:${tsLine} -> JS ${jsPath}:${tsLine}`);
+                jsBreakpoints.push({
+                    jsPath,
+                    line: tsLine,
+                    originalLine: tsLine
+                });
+            }
+        }
+    }
+
+    const jsPath = this._tsToJsMap.get(normalizedTsPath);
+    if (jsPath) {
+        this._runtime.clearBreakpoints(jsPath);
+    }
+
+    // Set breakpoints in JavaScript files with error handling
+    const actualBreakpoints = await Promise.all(
+        jsBreakpoints.map(async (bp) => {
+            try {
+                const { verified, line, id } = await this._runtime.setBreakPoint(bp.jsPath, bp.line);
+                
+                // Convert back to TypeScript line number for response
+                const tsLocation = await this.convertJsToTs(bp.jsPath, line);
+                const finalLine = tsLocation ? tsLocation.line : bp.originalLine;
+                
+                const breakpoint = new Breakpoint(verified, this.convertDebuggerLineToClient(finalLine)) as DebugProtocol.Breakpoint;
+                breakpoint.id = id;
+                return breakpoint;
+            } catch (error) {
+                console.error(`Failed to set breakpoint at ${bp.jsPath}:${bp.line}:`, error);
+                // Return unverified breakpoint
+                const breakpoint = new Breakpoint(false, this.convertDebuggerLineToClient(bp.originalLine)) as DebugProtocol.Breakpoint;
+                return breakpoint;
+            }
+        })
+    );
+
+    response.body = {
+        breakpoints: actualBreakpoints
+    };
+    this.sendResponse(response);
+}
 
 
 
@@ -2297,5 +2219,4 @@ export class MockDebugSession extends LoggingDebugSession {
 }
 
 }
-
 

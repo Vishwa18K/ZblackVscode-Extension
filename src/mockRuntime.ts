@@ -250,8 +250,6 @@ export function timeout(ms: number) {
 
 export class MockRuntime extends EventEmitter {
 
-
-
 	// the initial (and one and only) file we are 'debugging'
 
 	private _sourceFile: string = '';
@@ -322,9 +320,16 @@ export class MockRuntime extends EventEmitter {
 
 
 
-	constructor(private fileAccessor: FileAccessor) {
+	// Change from private to public
+	public fileAccessor: FileAccessor;
+
+
+
+	constructor(fileAccessor: FileAccessor) {
 
 		super();
+
+		this.fileAccessor = fileAccessor;
 
 	}
 
@@ -353,87 +358,111 @@ public async start(program: string, stopOnEntry: boolean, debug: boolean): Promi
 
 private async startNodeWithVSCodeDebugger(program: string, stopOnEntry: boolean): Promise<void> {
     try {
-        // Start Node with inspector
-        this.nodeProcess = spawn('node', [
-            `--inspect=${this.debugPort}`,
-            program
-        ], {
-            stdio: ['pipe', 'pipe', 'pipe']
+        // Start Node with dynamic port selection
+        this.nodeProcess = spawn('node', ['--inspect=0', program], {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            env: { ...process.env, NODE_OPTIONS: '' }  // Ensure clean env
         });
 
-        this.nodeProcess.stdout?.on('data', (data) => {
-            this.sendEvent('output', 'out', data.toString(), this._sourceFile, 0, 0);
+        // Create a promise to capture debug port
+        const portPromise = new Promise<number>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error('Timeout waiting for debug port'));
+            }, 5000);
+
+            const stderrHandler = (data: Buffer) => {
+                const output = data.toString();
+                const match = output.match(/Debugger listening on ws:\/\/[^:]+:(\d+)\//);
+                if (match) {
+                    clearTimeout(timeout);
+                    this.nodeProcess?.stderr?.off('data', stderrHandler);
+                    resolve(parseInt(match[1]));
+                }
+            };
+
+            this.nodeProcess?.stderr?.on('data', stderrHandler);
         });
 
-        this.nodeProcess.stderr?.on('data', (data) => {
-            this.sendEvent('output', 'err', data.toString(), this._sourceFile, 0, 0);
-        });
-
-        this.nodeProcess.on('exit', () => {
-            this.sendEvent('end');
-        });
+        // Wait for port detection
+        this.debugPort = await portPromise;
+        console.log(`Debugger port detected: ${this.debugPort}`);
 
         // Connect to inspector
         await this.connectToInspector();
         
-        // IMPORTANT: Don't send 'initialized' or 'stopOnEntry' events here
-        // The debug adapter (MockDebugSession) handles this via DAP protocol
-        
     } catch (error) {
-        console.error('Failed to start Node.js with VS Code debugger:', error);
-        throw error;
+        console.error('Failed to start Node.js with debugger:', error);
+        // Fallback to normal execution
+        await this.startNodeNormal(program);
     }
 }
 
 private async connectToInspector(): Promise<void> {
-    // Wait for inspector to be ready
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // Add retry mechanism
+    const maxRetries = 5;
+    let retries = 0;
     
-    try {
-        // Use http module instead of fetch
-        const http = await import('http');
-        
-        const response = await new Promise<string>((resolve, reject) => {
-            const req = http.get(`http://localhost:${this.debugPort}/json`, (res) => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => resolve(data));
+    while (retries < maxRetries) {
+        try {
+            console.log(`Connecting to inspector on port ${this.debugPort}, attempt ${retries+1}`);
+            const http = await import('http');
+            
+            // Use localhost instead of 127.0.0.1 for better Windows compatibility
+            const response = await new Promise<string>((resolve, reject) => {
+                const req = http.get(`http://localhost:${this.debugPort}/json`, res => {
+                    let data = '';
+                    res.on('data', chunk => data += chunk);
+                    res.on('end', () => resolve(data));
+                });
+                req.on('error', reject);
             });
-            req.on('error', reject);
-        });
-        
-        const sessions = JSON.parse(response);
-        const debugUrl = sessions[0]?.webSocketDebuggerUrl;
-        
-        if (!debugUrl) {
-            throw new Error('Could not get debug URL from inspector');
-        }
+            
+            const sessions = JSON.parse(response);
+            const debugUrl = sessions[0]?.webSocketDebuggerUrl;
+            
+            if (!debugUrl) {
+                throw new Error('No debug URL found in response');
+            }
 
-        // Connect to the debug session
-        const WebSocket = (await import('ws')).default;
-        const debugWs = new WebSocket(debugUrl);
-        
-        this.debugConnection = {
-            websocket: debugWs,
-            messageId: 1
-        };
+            const WebSocket = (await import('ws')).default;
+            const debugWs = new WebSocket(debugUrl);
+            
+            // Wait for connection to open
+            await new Promise<void>((resolve, reject) => {
+                debugWs.on('open', resolve);
+                debugWs.on('error', reject);
+                setTimeout(() => reject(new Error('WebSocket connection timeout')), 2000);
+            });
+            
+            this.debugConnection = {
+                websocket: debugWs,
+                messageId: 1
+            };
 
-        debugWs.on('open', async () => {
-            // Enable necessary domains
+            // Set up message handler
+            debugWs.on('message', (data) => {
+                this.handleV8Message(JSON.parse(data.toString()));
+            });
+
+            // Initialize debug session
             await this.sendV8Command('Runtime.enable');
             await this.sendV8Command('Debugger.enable');
             await this.sendV8Command('Debugger.setPauseOnExceptions', { state: 'none' });
-        });
-
-        debugWs.on('message', (data) => {
-            this.handleV8Message(JSON.parse(data.toString()));
-        });
-
-    } catch (error) {
-        console.error('Failed to connect to V8 inspector:', error);
-        // Don't throw - fall back to mock debugging
+            
+            console.log('Successfully connected to V8 inspector');
+            return;
+            
+        } catch (error) {
+            console.error(`Connection attempt ${retries+1} failed:`, error);
+            retries++;
+            await new Promise(resolve => setTimeout(resolve, 300));
+        }
     }
+    
+    throw new Error(`Failed to connect after ${maxRetries} attempts`);
 }
+
+
 
 
 
@@ -1402,7 +1431,6 @@ private async connectToInspector(): Promise<void> {
 			}
 
 		}
-
 		if (stepEvent) {
 
 			this.sendEvent(stepEvent);
@@ -1410,7 +1438,6 @@ private async connectToInspector(): Promise<void> {
 			return true;
 
 		}
-
 		return false;
 
 	}
